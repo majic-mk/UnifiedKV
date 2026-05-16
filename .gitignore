@@ -1,0 +1,53 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.pyo
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local env/secrets
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+
+# Models/datasets/checkpoints
+models/
+datasets/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+ShareGPT_V3_unfiltered_cleaned_split.json
+
+# Experiment outputs/logs
+benchmarks/results/
+benchmarks/archive/
+results/
+backups/
+*.log
+*.jsonl
+*.steps.jsonl
+*.progress.jsonl
+*.partial.json
+*.pid
+*.stdout
+*.stderr
+
+# Local/editor
+.trae/
+.vscode/
+.idea/
+.DS_Store
+*.stdout.txt
+*.stderr.txt
+*.nohup
+*.bg.log
+__tmp*.py
+benchmarks/probes/
+benchmarks/exp1_*/
+??????.md
