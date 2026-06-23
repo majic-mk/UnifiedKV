@@ -14,9 +14,9 @@ TASKS = [
 METHODS = ["hf_vanilla", "off_compress_page16_b1024", "off_compress_page16_b2048", "off_compress_page16_b4096"]
 LABELS = {
     "hf_vanilla": "HF vanilla",
-    "off_compress_page16_b1024": "UnifiedKV-Compress 1024",
-    "off_compress_page16_b2048": "UnifiedKV-Compress 2048",
-    "off_compress_page16_b4096": "UnifiedKV-Compress 4096",
+    "off_compress_page16_b1024": "BP-KV-Compress 1024",
+    "off_compress_page16_b2048": "BP-KV-Compress 2048",
+    "off_compress_page16_b4096": "BP-KV-Compress 4096",
 }
 CATEGORIES = {
     "narrativeqa": "Single-Doc QA", "qasper": "Single-Doc QA", "multifieldqa_en": "Single-Doc QA",
@@ -172,7 +172,7 @@ def main():
     md = []
     md.append("# LongBench Full Official Summary")
     md.append("")
-    md.append("Official LongBench prompts, metrics, max_gen, and full English task files. UnifiedKV rows should have `decode_rebuild_steps=0`, `decode_materialize_kv_bytes=0`, and `resident_miss_steps=0` in per-task JSONs.")
+    md.append("Official LongBench prompts, metrics, max_gen, and full English task files. BP-KV rows should have `decode_rebuild_steps=0`, `decode_materialize_kv_bytes=0`, and `resident_miss_steps=0` in per-task JSONs.")
     md.append("")
     md.append("## Main Table")
     md.append(markdown_table(main_rows))

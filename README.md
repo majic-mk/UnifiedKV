@@ -1,4 +1,4 @@
-# UnifiedKV / BP-KV
+# BP-KV
 
 This repository contains the research prototype used for BP-KV, a fixed-budget
 block-paged KV-cache runtime for long-context LLM inference under memory

@@ -28,11 +28,11 @@ from strategy_groups import COMMON_BASE, GROUP_ARGS  # noqa: E402
 METHOD_LABELS = {
     "hf_vanilla": "HuggingFace",
     "vllm": "vLLM",
-    "legacy_off_raw_page16": "UnifiedKV-Raw",
-    "off_compress_page16": "UnifiedKV-Compress",
-    "off_compress_page16_b2048": "UnifiedKV-Compress-b2048",
-    "p2_page16_offline": "UnifiedKV-Offline",
-    "p2_page16_offline_b2048": "UnifiedKV-Offline-b2048",
+    "legacy_off_raw_page16": "BP-KV-Raw",
+    "off_compress_page16": "BP-KV-Compress",
+    "off_compress_page16_b2048": "BP-KV-Compress-b2048",
+    "p2_page16_offline": "BP-KV-Offline",
+    "p2_page16_offline_b2048": "BP-KV-Offline-b2048",
 }
 OOM_KEYWORDS = (
     "out of memory",
@@ -113,7 +113,7 @@ def choose_filler_ids(tokenizer, count: int = 512) -> List[int]:
 def build_fixed_input_ids(tokenizer, input_len: int, batch_size: int) -> List[List[int]]:
     """Build exact-length synthetic prompts with deterministic per-request variation.
 
-    The variation avoids accidentally giving vLLM/HF/UnifiedKV identical long prefixes.
+    The variation avoids accidentally giving vLLM/HF/BP-KV identical long prefixes.
     Input length is the actual input_ids length, including BOS when available.
     """
     if input_len <= 0:

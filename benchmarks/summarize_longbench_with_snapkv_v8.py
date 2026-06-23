@@ -23,9 +23,9 @@ CAT_ORDER = ["Single-Doc QA", "Multi-Doc QA", "Summarization", "Few-shot", "Synt
 METHODS = [
     ("hf_vanilla", "HF vanilla", [Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama"), Path("benchmarks/results/paper/quality_v3/longbench_full_official_llama")]),
     ("snapkv_dense_b2048", "SnapKV dense 2048", [Path("benchmarks/results/paper/quality_v8/longbench_snapkv_dense_b2048_llama")]),
-    ("off_compress_page16_b1024", "UnifiedKV-Compress 1024", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
-    ("off_compress_page16_b2048", "UnifiedKV-Compress 2048", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
-    ("off_compress_page16_b4096", "UnifiedKV-Compress 4096", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
+    ("off_compress_page16_b1024", "BP-KV-Compress 1024", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
+    ("off_compress_page16_b2048", "BP-KV-Compress 2048", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
+    ("off_compress_page16_b4096", "BP-KV-Compress 4096", [Path("benchmarks/results/paper/quality_v5/longbench_fixed_budget_selected_writeback_llama"), Path("benchmarks/results/paper/quality_v4/longbench_fixed_budget_llama")]),
 ]
 OUT_DIR = Path("benchmarks/results/paper/quality_v8/longbench_with_snapkv_summary")
 

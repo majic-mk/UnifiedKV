@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adaptive fixed-budget Passkey runner for UnifiedKV quality experiments.
+"""Adaptive fixed-budget Passkey runner for BP-KV quality experiments.
 
 Runs Passkey from long to short context lengths. For each method, once a
 measured longer length reaches 100% strict EM with full completion, all shorter
