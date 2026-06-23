@@ -349,7 +349,14 @@ def run_unifiedkv_worker(model_name: str, method: str, input_ids_list: List[List
     step_rows: List[Dict[str, Any]] = []
     try:
         engine = build_engine(model_name, method, gpu_mem_frac, max_new_tokens)
-        planner = apply_offline_budget_planner(engine, len(input_ids_list), int(max_new_tokens))
+        if str(os.environ.get("KV_BENCH_DISABLE_OFFLINE_PLANNER", "")).strip() == "1":
+            planner = {
+                "offline_budget_planner_enabled": 0,
+                "offline_planner_disabled_by_env": 1,
+                "offline_planner_submitted_batch": int(len(input_ids_list)),
+            }
+        else:
+            planner = apply_offline_budget_planner(engine, len(input_ids_list), int(max_new_tokens))
         engine.tokenizer.eos_token_id = None
         engine._reset_online_runtime(clear_request_counter=True)
         engine._return_details_online = False
@@ -602,7 +609,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-len", type=int, default=32768)
     p.add_argument("--max-new-tokens", type=int, default=1024)
     p.add_argument("--gpu-mem-frac-map", type=str, default="legacy_off_raw_page16:0.70,off_compress_page16:0.70,p2_page16_offline:0.70")
-    p.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.96)
+    p.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
     p.add_argument("--worker-timeout-s", type=float, default=7200.0)
     p.add_argument("--subprocess-timeout-s", type=float, default=9000.0)
     p.add_argument("--out-dir", type=str, default="benchmarks/results/probes/offline_32k_capacity")

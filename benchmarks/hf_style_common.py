@@ -1,5 +1,6 @@
 import gc
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import torch
@@ -131,18 +132,30 @@ def _ensure_padding_token(tokenizer):
 
 def _load_model(model_name: str, tokenizer):
     if torch.cuda.is_available():
-        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        dtype = torch.float16
         device_map = "auto"
     else:
         dtype = torch.float32
         device_map = None
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_name),
-        torch_dtype=dtype,
-        device_map=device_map,
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-    )
+    load_kwargs = {
+        "torch_dtype": dtype,
+        "device_map": device_map,
+        "low_cpu_mem_usage": True,
+        "trust_remote_code": True,
+    }
+    if torch.cuda.is_available():
+        load_kwargs["attn_implementation"] = "flash_attention_2"
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_name),
+            **load_kwargs,
+        )
+    except Exception:
+        load_kwargs.pop("attn_implementation", None)
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_name),
+            **load_kwargs,
+        )
     if getattr(model, "config", None) is not None and len(tokenizer) > int(getattr(model.config, "vocab_size", len(tokenizer))):
         model.resize_token_embeddings(len(tokenizer))
     model.eval()
@@ -166,6 +179,42 @@ def _count_tokens(tokenizer, text: str) -> int:
     if not str(text or "").strip():
         return 0
     return int(len(tokenizer(str(text), add_special_tokens=False).input_ids))
+
+
+def _encode_manifest_batch(items, pad_token_id: int, device: torch.device):
+    rows = [
+        torch.as_tensor(item["input_ids"], dtype=torch.long)
+        for item in items
+    ]
+    if not rows or any(row.numel() <= 0 for row in rows):
+        raise ValueError("each manifest item must contain non-empty input_ids")
+    width = max(int(row.numel()) for row in rows)
+    input_ids = torch.full(
+        (len(rows), width),
+        int(pad_token_id),
+        dtype=torch.long,
+    )
+    attention_mask = torch.zeros((len(rows), width), dtype=torch.long)
+    for index, row in enumerate(rows):
+        length = int(row.numel())
+        input_ids[index, width - length :] = row
+        attention_mask[index, width - length :] = 1
+    return {
+        "input_ids": input_ids.to(device),
+        "attention_mask": attention_mask.to(device),
+    }
+
+
+def _batch_eos_token_ids(items):
+    values = [
+        tuple(int(token_id) for token_id in item.get("eos_token_ids", []))
+        for item in items
+    ]
+    if not values or not values[0]:
+        return None
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError("all requests in an HF batch must use the same EOS set")
+    return list(values[0])
 
 
 def _build_failure_rows(
@@ -341,23 +390,28 @@ def run_hf_style_prompt_batches(
             if fatal_error:
                 break
             for batch in _chunked(list(items), int(concurrency)):
-                prompts = [str(item["prompt"]) for item in batch]
                 try:
                     if torch.cuda.is_available():
                         torch.cuda.reset_peak_memory_stats()
                         torch.cuda.synchronize()
                     started = time.perf_counter()
-                    encoded = tokenizer(prompts, return_tensors="pt", padding=True, truncation=False)
-                    encoded = {k: v.to(input_device) for k, v in encoded.items()}
+                    encoded = _encode_manifest_batch(
+                        batch,
+                        int(tokenizer.pad_token_id),
+                        input_device,
+                    )
                     prompt_width = int(encoded["input_ids"].shape[1])
+                    eos_token_ids = _batch_eos_token_ids(batch)
                     with torch.inference_mode():
                         outputs = model.generate(
                             **encoded,
                             max_new_tokens=int(max_new_tokens),
+                            min_new_tokens=1,
+                            num_beams=1,
                             do_sample=False,
                             use_cache=True,
                             pad_token_id=int(tokenizer.pad_token_id),
-                            eos_token_id=int(tokenizer.eos_token_id) if tokenizer.eos_token_id is not None else None,
+                            eos_token_id=eos_token_ids,
                         )
                     if torch.cuda.is_available():
                         torch.cuda.synchronize()
@@ -454,18 +508,188 @@ def run_hf_style_continuous(
     max_new_tokens: int,
     repeats: int,
     evaluate_output_fn: Callable[[Dict[str, Any], str], Dict[str, Any]],
+    use_target_tokens: bool = False,
 ) -> Dict[str, Any]:
-    del model_name
-    if str(method) == "off_raw":
+    method = str(method)
+    total_requested = int(len(items) * max(1, repeats))
+    if method == "off_raw":
         reason = STRICT_OFF_RAW_UNSUPPORTED_REASON
-    else:
-        reason = HF_STYLE_CONTINUOUS_UNSUPPORTED_REASON
-    return make_hf_style_unsupported_result(
-        method=str(method),
+        return make_hf_style_unsupported_result(
+            method=method,
+            serving_mode="continuous_refill",
+            total_requested=total_requested,
+            concurrency=int(concurrency),
+            max_new_tokens=int(max_new_tokens),
+            reason=reason,
+            rows=_build_failure_rows(items, repeats, evaluate_output_fn, reason),
+        )
+    if method != "hf_vanilla":
+        raise ValueError(f"unsupported hf-style continuous method: {method}")
+
+    tokenizer = _load_tokenizer(model_name)
+    model = None
+    rows: List[Dict[str, Any]] = []
+    total_wall_ms = 0.0
+    fatal_error = ""
+    max_alloc_gb = 0.0
+    max_reserved_gb = 0.0
+
+    def request_limit(item: Dict[str, Any]) -> int:
+        if bool(use_target_tokens):
+            try:
+                target = int(item.get("target_tokens", 0) or 0)
+            except Exception:
+                target = 0
+            if target > 0:
+                return max(1, target)
+        return max(1, int(max_new_tokens))
+
+    max_request_new_tokens = max((request_limit(dict(x)) for x in items), default=max(1, int(max_new_tokens)))
+
+    try:
+        model = _load_model(model_name, tokenizer)
+        input_device = _model_input_device(model)
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+
+        def make_failed_row(repeat_idx: int, item: Dict[str, Any], error: str) -> Dict[str, Any]:
+            extra = dict(evaluate_output_fn(dict(item), "") or {})
+            extra.pop("valid", None)
+            return {
+                "repeat_idx": int(repeat_idx),
+                "record_idx": int(item.get("record_idx", -1)),
+                "turn_idx": int(item.get("turn_idx", -1)),
+                "prompt_tokens": int(item.get("prompt_tokens", 0) or 0),
+                "target_tokens": int(item.get("target_tokens", 0) or 0),
+                "request_max_new_tokens": int(request_limit(item)),
+                "completed": 0,
+                "valid": 0,
+                "completion_tokens": 0,
+                "request_latency_ms": 0.0,
+                "wall_ms": 0.0,
+                "ttft_ms": 0.0,
+                "avg_itl_ms": 0.0,
+                "min_free_blocks": -1,
+                "error_reason": str(error),
+                "output_text": "",
+                **extra,
+            }
+
+        def run_one(repeat_idx: int, item: Dict[str, Any]) -> Dict[str, Any]:
+            req_max_new_tokens = request_limit(item)
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                started = time.perf_counter()
+                encoded = tokenizer(str(item["prompt"]), return_tensors="pt", truncation=False)
+                encoded = {k: v.to(input_device) for k, v in encoded.items()}
+                prompt_width = int(encoded["input_ids"].shape[1])
+                with torch.inference_mode():
+                    outputs = model.generate(
+                        **encoded,
+                        max_new_tokens=int(req_max_new_tokens),
+                        do_sample=False,
+                        use_cache=True,
+                        pad_token_id=int(tokenizer.pad_token_id),
+                        eos_token_id=int(tokenizer.eos_token_id) if tokenizer.eos_token_id is not None else None,
+                    )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                wall_ms = (time.perf_counter() - started) * 1000.0
+                generated = outputs[:, prompt_width:]
+                text = str(tokenizer.decode(generated[0], skip_special_tokens=True) or "")
+                comp_tokens = int(_count_tokens(tokenizer, text))
+                extra = dict(evaluate_output_fn(dict(item), text) or {})
+                valid = int(extra.pop("valid", int(bool(text.strip()))))
+                del encoded, outputs, generated
+                return {
+                    "repeat_idx": int(repeat_idx),
+                    "record_idx": int(item.get("record_idx", -1)),
+                    "turn_idx": int(item.get("turn_idx", -1)),
+                    "prompt_tokens": int(item.get("prompt_tokens", 0) or 0),
+                    "target_tokens": int(item.get("target_tokens", 0) or 0),
+                    "request_max_new_tokens": int(req_max_new_tokens),
+                    "completed": int(bool(text.strip())),
+                    "valid": int(valid if text.strip() else 0),
+                    "completion_tokens": int(comp_tokens),
+                    "request_latency_ms": float(round(wall_ms, 3)),
+                    "wall_ms": float(round(wall_ms, 3)),
+                    "ttft_ms": 0.0,
+                    "avg_itl_ms": float(round((wall_ms / max(1, comp_tokens)) if comp_tokens > 0 else 0.0, 3)),
+                    "min_free_blocks": -1,
+                    "error_reason": "",
+                    "output_text": text,
+                    **extra,
+                }
+            except Exception as exc:
+                _cleanup_cuda()
+                return make_failed_row(repeat_idx, item, str(exc))
+
+        items_list = [dict(x) for x in items]
+        for repeat_idx in range(max(1, int(repeats))):
+            if fatal_error:
+                break
+            submitted = 0
+            pending: Dict[Any, int] = {}
+            t0 = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=max(1, int(concurrency))) as pool:
+                while submitted < len(items_list) and len(pending) < int(concurrency):
+                    fut = pool.submit(run_one, int(repeat_idx), dict(items_list[submitted]))
+                    pending[fut] = submitted
+                    submitted += 1
+                while pending:
+                    done, _ = wait(list(pending.keys()), return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        idx = pending.pop(fut)
+                        try:
+                            row = dict(fut.result())
+                        except Exception as exc:
+                            row = make_failed_row(int(repeat_idx), dict(items_list[idx]), str(exc))
+                        rows.append(row)
+                        err = str(row.get("error_reason", "")).strip()
+                        if err:
+                            fatal_error = err
+                    if fatal_error:
+                        for fut in list(pending.keys()):
+                            fut.cancel()
+                        break
+                    while submitted < len(items_list) and len(pending) < int(concurrency):
+                        fut = pool.submit(run_one, int(repeat_idx), dict(items_list[submitted]))
+                        pending[fut] = submitted
+                        submitted += 1
+            total_wall_ms += (time.perf_counter() - t0) * 1000.0
+            if fatal_error:
+                for idx in range(submitted, len(items_list)):
+                    rows.append(make_failed_row(int(repeat_idx), dict(items_list[idx]), fatal_error or "not_executed_after_failure"))
+                break
+        if torch.cuda.is_available():
+            max_alloc_gb = max(max_alloc_gb, float(torch.cuda.max_memory_allocated() / (1024 ** 3)))
+            max_reserved_gb = max(max_reserved_gb, float(torch.cuda.max_memory_reserved() / (1024 ** 3)))
+    finally:
+        del model
+        _cleanup_cuda()
+
+    if fatal_error and len(rows) < total_requested:
+        blank = dict(items[0]) if items else {}
+        for _ in range(total_requested - len(rows)):
+            rows.append(make_failed_row(0, blank, fatal_error or "not_executed_after_failure"))
+
+    summary = _summarize_hf_rows(
+        method=method,
         serving_mode="continuous_refill",
-        total_requested=int(len(items) * max(1, repeats)),
+        rows=rows,
+        total_requested=total_requested,
+        total_wall_ms=total_wall_ms if total_wall_ms > 0 else 1.0,
         concurrency=int(concurrency),
         max_new_tokens=int(max_new_tokens),
-        reason=reason,
-        rows=_build_failure_rows(items, repeats, evaluate_output_fn, reason),
+        max_alloc_gb=max_alloc_gb,
+        max_reserved_gb=max_reserved_gb,
     )
+    summary["generation_length_policy"] = "target_tokens" if bool(use_target_tokens) else "fixed_max_new_tokens"
+    summary["max_request_new_tokens"] = int(max_request_new_tokens)
+    summary["timing_note"] = (
+        "HF continuous runner uses native Transformers generate() per request with request-level refill; "
+        "it does not implement a token-level serving scheduler. TTFT is not exposed."
+    )
+    return summary

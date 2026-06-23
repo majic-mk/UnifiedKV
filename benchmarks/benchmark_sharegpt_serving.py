@@ -468,7 +468,7 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260409)
     parser.add_argument("--gpu-mem-frac-map", type=str, default="")
-    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.85)
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--base-url", type=str, default="")
     parser.add_argument("--request-timeout-s", type=float, default=DEFAULT_REQUEST_TIMEOUT_S)
     parser.add_argument("--server-log", type=str, default="")

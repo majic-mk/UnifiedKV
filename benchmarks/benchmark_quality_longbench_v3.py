@@ -65,19 +65,72 @@ def middle_truncate(tokenizer, prompt: str, max_tokens: int) -> Tuple[str,int,in
     half = int(max_tokens)//2; kept = ids[:half] + ids[-(int(max_tokens)-half):]
     return tokenizer.decode(kept, skip_special_tokens=True), len(kept), orig
 
-def build_samples(tokenizer, task: str, records: Sequence[Dict[str,Any]], n: int, max_prompt_tokens: int, seed: int, prompt_map: Dict[str,str]) -> List[Dict[str,Any]]:
+def _is_qwen3_tokenizer(tokenizer) -> bool:
+    name = str(getattr(tokenizer, 'name_or_path', '') or '').lower()
+    cls = tokenizer.__class__.__name__.lower()
+    return 'qwen3' in name or ('qwen' in name and 'qwen2' in cls)
+
+def apply_longbench_chat_template(tokenizer, prompt: str, mode: str) -> str:
+    mode = str(mode or 'none').strip().lower()
+    if mode in {'none', 'raw', 'off'}:
+        return prompt
+    if mode == 'auto' and not _is_qwen3_tokenizer(tokenizer):
+        return prompt
+    if mode not in {'auto', 'qwen3'}:
+        raise ValueError(f'unknown chat_template_mode={mode}')
+    system = (
+        'You are a careful long-context question answering assistant. '
+        'Answer directly and concisely. Do not explain your reasoning. '
+        'Do not repeat the answer.'
+    )
+    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+def prepare_prompt(tokenizer, raw: str, max_prompt_tokens: int, chat_template_mode: str) -> Tuple[str,int,int]:
+    mode = str(chat_template_mode or 'none').strip().lower()
+    if mode in {'none', 'raw', 'off'}:
+        return middle_truncate(tokenizer, raw, max_prompt_tokens)
+
+    # Keep chat-template truncation cheap: first reserve template overhead, then
+    # wrap once. A full binary search repeatedly tokenizes 32K-token prompts and
+    # makes small Qwen smoke runs spend minutes before model execution starts.
+    max_tokens = int(max_prompt_tokens)
+    empty_wrapped = apply_longbench_chat_template(tokenizer, '', mode)
+    template_overhead = len(tokenizer(empty_wrapped, truncation=False, add_special_tokens=False).input_ids)
+    raw_budget = max(1, max_tokens - template_overhead - 8)
+    orig_raw_ids = tokenizer(raw, truncation=False, add_special_tokens=False).input_ids
+    orig_raw_len = len(orig_raw_ids)
+
+    for _ in range(4):
+        raw_mid, raw_len, _ = middle_truncate(tokenizer, raw, raw_budget)
+        wrapped = apply_longbench_chat_template(tokenizer, raw_mid, mode)
+        wrapped_len = len(tokenizer(wrapped, truncation=False, add_special_tokens=False).input_ids)
+        if wrapped_len <= max_tokens:
+            return wrapped, wrapped_len, max(0, orig_raw_len - min(orig_raw_len, raw_len))
+        raw_budget = max(1, raw_budget - (wrapped_len - max_tokens) - 8)
+
+    raw_mid, raw_len, _ = middle_truncate(tokenizer, raw, max(1, raw_budget))
+    wrapped = apply_longbench_chat_template(tokenizer, raw_mid, mode)
+    wrapped_ids = tokenizer(wrapped, truncation=True, max_length=max_tokens, add_special_tokens=False).input_ids
+    return tokenizer.decode(wrapped_ids, skip_special_tokens=True), len(wrapped_ids), max(0, orig_raw_len - min(orig_raw_len, raw_len))
+
+def build_samples(tokenizer, task: str, records: Sequence[Dict[str,Any]], n: int, max_prompt_tokens: int, seed: int, prompt_map: Dict[str,str], chat_template_mode: str = 'none') -> List[Dict[str,Any]]:
     candidates=[]
     for idx, rec in enumerate(records):
         try: raw = str(prompt_map[task]).format(**rec)
         except Exception: continue
-        prompt, toks, trunc = middle_truncate(tokenizer, raw, max_prompt_tokens)
+        prompt, toks, trunc = prepare_prompt(tokenizer, raw, max_prompt_tokens, chat_template_mode)
         answers = rec.get('answers', []); answers = answers if isinstance(answers, list) else [answers]
         candidates.append({"task":task,"category":TASK_CATEGORIES.get(task,"Other"),"sample_idx":idx,"prompt":prompt,"prompt_tokens":toks,"truncated_from_tokens":trunc,"answers":[str(x) for x in answers],"all_classes":list(rec.get('all_classes', []) or []),"length":int(rec.get('length', toks) or toks)})
     if not candidates: raise RuntimeError(f'no usable samples for task={task}')
     rng = random.Random(int(seed) ^ sum((i+1)*ord(c) for i,c in enumerate(task)))
     if len(candidates) <= int(n): rng.shuffle(candidates); return candidates
     return rng.sample(candidates, int(n))
-
 def score_official(task: str, output: str, answers: Sequence[str], all_classes: Sequence[str], metric_map: Dict[str,Any]) -> Tuple[float,int]:
     if not answers: return 0.0, 0
     pred = str(output or '')
@@ -158,17 +211,17 @@ def macro(rows: Sequence[Dict[str,Any]], tasks: Sequence[str]) -> Dict[str,Any]:
 def main():
     ap=argparse.ArgumentParser(description='LongBench quality v3 runner with official prompts and metrics.')
     ap.add_argument('--mode', choices=['gate','formal'], default='gate'); ap.add_argument('--model-name', default=LOCAL_MODEL_PATH); ap.add_argument('--dataset-root', default=''); ap.add_argument('--longbench-repo', default='')
-    ap.add_argument('--tasks', default=''); ap.add_argument('--methods', default=DEFAULT_METHODS); ap.add_argument('--samples-per-task', type=int, default=0); ap.add_argument('--max-prompt-tokens', type=int, default=32768); ap.add_argument('--max-new-tokens', type=int, default=64); ap.add_argument('--use-official-max-gen', action='store_true'); ap.add_argument('--concurrency', type=int, default=1); ap.add_argument('--seed', type=int, default=DEFAULT_SEED); ap.add_argument('--gpu-mem-frac-map', default=''); ap.add_argument('--out', required=True)
+    ap.add_argument('--tasks', default=''); ap.add_argument('--methods', default=DEFAULT_METHODS); ap.add_argument('--samples-per-task', type=int, default=0); ap.add_argument('--max-prompt-tokens', type=int, default=32768); ap.add_argument('--max-new-tokens', type=int, default=64); ap.add_argument('--use-official-max-gen', action='store_true'); ap.add_argument('--concurrency', type=int, default=1); ap.add_argument('--seed', type=int, default=DEFAULT_SEED); ap.add_argument('--gpu-mem-frac-map', default=''); ap.add_argument('--chat-template-mode', choices=['none','auto','qwen3'], default='none'); ap.add_argument('--out', required=True)
     args=ap.parse_args(); root=resolve_dataset_root(args.dataset_root); repo=find_repo(root, args.longbench_repo); prompt_map,maxgen_map,metric_map=load_assets(repo)
     tasks = csv_strs(args.tasks) if args.tasks.strip() else (GATE_TASKS if args.mode=='gate' else FORMAL_TASKS); methods=parse_methods(args.methods, allow_vllm=False); n=int(args.samples_per_task or (20 if args.mode=='gate' else 100)); frac_map=parse_method_frac_map(args.gpu_mem_frac_map, defaults=DEFAULT_GPU_MEM_FRAC_MAP); tok=load_tokenizer(args.model_name); eval_fn=make_eval(metric_map)
     rows=[]; manifest={}
     for task in tasks:
-        path=resolve_task_file(root, task); records=load_records(path); samples=build_samples(tok, task, records, n, args.max_prompt_tokens, args.seed, prompt_map); max_gen=int(maxgen_map.get(task,args.max_new_tokens)) if args.use_official_max_gen else int(args.max_new_tokens)
+        path=resolve_task_file(root, task); records=load_records(path); samples=build_samples(tok, task, records, n, args.max_prompt_tokens, args.seed, prompt_map, args.chat_template_mode); max_gen=int(maxgen_map.get(task,args.max_new_tokens)) if args.use_official_max_gen else int(args.max_new_tokens)
         manifest[task]={"task_file":str(path),"available_records":len(records),"selected_samples":len(samples),"max_new_tokens_effective":max_gen,"prompt_tokens_min":min(int(x['prompt_tokens']) for x in samples),"prompt_tokens_max":max(int(x['prompt_tokens']) for x in samples),"prompt_tokens_mean":round(mean(int(x['prompt_tokens']) for x in samples),2)}
         print(f"[longbench] task={task} samples={len(samples)} max_gen={max_gen}", flush=True)
         for m in methods:
             print(f"[longbench] running method={m} task={task}", flush=True); r=run_task_method(str(args.model_name), m, samples, tok, args.concurrency, max_gen, frac_map, eval_fn); rows.append(r)
             print(json.dumps({k:r.get(k) for k in ['method','task','score','completion_rate','valid_completion_rate','p2_attempted_steps','resident_miss_steps','error_reason']}, ensure_ascii=False), flush=True)
-    payload={"meta":{"task":"longbench_quality_v3","mode":args.mode,"model_name":args.model_name,"dataset_root":str(root),"longbench_repo":str(repo),"tasks":tasks,"methods":methods,"samples_per_task":n,"max_prompt_tokens":args.max_prompt_tokens,"max_new_tokens_arg":args.max_new_tokens,"use_official_max_gen":bool(args.use_official_max_gen),"concurrency":args.concurrency,"seed":args.seed,"metric_note":"Official LongBench metric functions from repo/LongBench/eval.py; scores are 0-100.","gate_note":"Gate mode detects severe quality regressions only; not a paper main-table result.","gpu_mem_frac_map":{str(k):float(v) for k,v in frac_map.items()}},"sample_manifest":manifest,"rows":rows,"tables":macro(rows,tasks)}
+    payload={"meta":{"task":"longbench_quality_v3","mode":args.mode,"model_name":args.model_name,"dataset_root":str(root),"longbench_repo":str(repo),"tasks":tasks,"methods":methods,"samples_per_task":n,"max_prompt_tokens":args.max_prompt_tokens,"max_new_tokens_arg":args.max_new_tokens,"use_official_max_gen":bool(args.use_official_max_gen),"concurrency":args.concurrency,"seed":args.seed,"metric_note":"Official LongBench metric functions from repo/LongBench/eval.py; scores are 0-100.","gate_note":"Gate mode detects severe quality regressions only; not a paper main-table result.","gpu_mem_frac_map":{str(k):float(v) for k,v in frac_map.items()},"chat_template_mode":str(args.chat_template_mode)},"sample_manifest":manifest,"rows":rows,"tables":macro(rows,tasks)}
     out=Path(args.out); out.parent.mkdir(parents=True, exist_ok=True); out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8'); print(f"Saved: {out}")
 if __name__ == '__main__': main()

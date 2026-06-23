@@ -277,6 +277,48 @@ class KVScheduler:
         scheduler = self
         original_q_proj = attn_module.q_proj
         original_forward = attn_module.forward
+        pending_q_tails = []
+
+        def cache_attention_space_queries(module, position_embeddings):
+            """Commit q_proj tails after applying the model's q_norm and RoPE."""
+            nonlocal pending_q_tails
+            if not pending_q_tails:
+                return
+            if position_embeddings is None or len(position_embeddings) < 2:
+                raise RuntimeError("prefill_score_missing_position_embeddings")
+
+            cos, sin = position_embeddings
+            batch_size = int(cos.shape[0]) if cos.dim() == 3 else 1
+            for batch_idx, sid, q_tail in pending_q_tails:
+                if hasattr(module, 'q_norm'):
+                    q_tail = module.q_norm(q_tail)
+
+                tail_len = int(q_tail.shape[1])
+                if cos.dim() == 3:
+                    rotary_batch_idx = batch_idx if batch_size > 1 else 0
+                    cos_tail = cos[rotary_batch_idx:rotary_batch_idx + 1, -tail_len:, :]
+                    sin_tail = sin[rotary_batch_idx:rotary_batch_idx + 1, -tail_len:, :]
+                elif cos.dim() == 2:
+                    cos_tail = cos[-tail_len:, :].unsqueeze(0)
+                    sin_tail = sin[-tail_len:, :].unsqueeze(0)
+                else:
+                    raise RuntimeError(f"prefill_score_bad_rope_shape shape={tuple(cos.shape)}")
+
+                q_tail = q_tail.unsqueeze(0)
+                cos_tail = cos_tail.unsqueeze(1).to(device=q_tail.device, dtype=q_tail.dtype)
+                sin_tail = sin_tail.unsqueeze(1).to(device=q_tail.device, dtype=q_tail.dtype)
+                half = int(q_tail.shape[-1] // 2)
+                q_rotated_half = torch.cat((-q_tail[..., half:], q_tail[..., :half]), dim=-1)
+                q_tail = (q_tail * cos_tail + q_rotated_half * sin_tail).squeeze(0).detach()
+
+                prev = scheduler.q_cache[layer_id].get(sid)
+                if prev is not None:
+                    q_tail = torch.cat([prev, q_tail], dim=1)
+                if q_tail.shape[1] > scheduler.snapkv.Lo:
+                    q_tail = q_tail[:, -scheduler.snapkv.Lo:, :]
+                scheduler.q_cache[layer_id][sid] = q_tail
+
+            pending_q_tails = []
 
         class CachingQProj(torch.nn.Module):
             def __init__(self):
@@ -284,19 +326,16 @@ class KVScheduler:
                 self.original = original_q_proj
 
             def forward(self, x):
+                nonlocal pending_q_tails
                 Q_out = self.original(x)
+                pending_q_tails = []
                 if scheduler.phase in (PhaseState.PREFILL, PhaseState.COMPRESS):
                     b, s, _ = Q_out.shape
                     Q = Q_out.view(b, s, scheduler.num_q_heads, scheduler.head_dim).transpose(1, 2)
                     for i, sid in enumerate(scheduler.active_seqs):
                         if i < b:
-                            q_tail = Q[i].detach()
-                            prev = scheduler.q_cache[layer_id].get(sid)
-                            if prev is not None:
-                                q_tail = torch.cat([prev, q_tail], dim=1)
-                            if q_tail.shape[1] > scheduler.snapkv.Lo:
-                                q_tail = q_tail[:, -scheduler.snapkv.Lo :, :]
-                            scheduler.q_cache[layer_id][sid] = q_tail
+                            q_tail = Q[i, :, -scheduler.snapkv.Lo:, :].detach()
+                            pending_q_tails.append((i, sid, q_tail))
                 return Q_out
 
         attn_module.q_proj = CachingQProj()
@@ -311,7 +350,7 @@ class KVScheduler:
             **kwargs,
         ):
             if not (scheduler.phase == PhaseState.DECODE and scheduler._paged_direct_active):
-                return original_forward(
+                output = original_forward(
                     hidden_states,
                     position_embeddings=position_embeddings,
                     attention_mask=attention_mask,
@@ -319,6 +358,9 @@ class KVScheduler:
                     cache_position=cache_position,
                     **kwargs,
                 )
+                if scheduler.phase in (PhaseState.PREFILL, PhaseState.COMPRESS):
+                    cache_attention_space_queries(module, position_embeddings)
+                return output
 
             ctx = scheduler._paged_direct_context or {}
             layer_views = ctx.get('layer_views') or {}
@@ -334,12 +376,16 @@ class KVScheduler:
             if q_len != 1:
                 raise RuntimeError(f"direct_decode_requires_q_len_1 got={q_len}")
 
-            q = module.q_proj(hidden_states)
-            k = module.k_proj(hidden_states)
-            v = module.v_proj(hidden_states)
-            q = q.view(bsz, q_len, scheduler.num_q_heads, scheduler.head_dim).transpose(1, 2)
-            k = k.view(bsz, q_len, scheduler.num_kv_heads, scheduler.head_dim).transpose(1, 2)
-            v = v.view(bsz, q_len, scheduler.num_kv_heads, scheduler.head_dim).transpose(1, 2)
+            q = module.q_proj(hidden_states).view(bsz, q_len, scheduler.num_q_heads, scheduler.head_dim)
+            k = module.k_proj(hidden_states).view(bsz, q_len, scheduler.num_kv_heads, scheduler.head_dim)
+            v = module.v_proj(hidden_states).view(bsz, q_len, scheduler.num_kv_heads, scheduler.head_dim)
+            if hasattr(module, 'q_norm'):
+                q = module.q_norm(q)
+            if hasattr(module, 'k_norm'):
+                k = module.k_norm(k)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
 
             cos, sin = position_embeddings
             q, k = llama_apply_rotary_pos_emb(q, k, cos, sin)
@@ -477,6 +523,26 @@ class KVScheduler:
         if not torch.is_tensor(x):
             return 0
         return int(x.numel() * x.element_size())
+
+    def _stash_raw_by_layer_to_cpu(self, seq_id: int, raw_by_layer: Dict[int, Tuple[torch.Tensor, torch.Tensor]]) -> None:
+        moved_bytes = 0
+        for layer_id in range(self.num_layers):
+            raw = raw_by_layer.get(layer_id)
+            if raw is None:
+                continue
+            K, V = raw
+            if K.device.type == "cuda":
+                K = K.detach().to("cpu").contiguous()
+                moved_bytes += self._tensor_nbytes(K)
+            if V.device.type == "cuda":
+                V = V.detach().to("cpu").contiguous()
+                moved_bytes += self._tensor_nbytes(V)
+            raw_by_layer[layer_id] = (K, V)
+            self.raw_kv_cache[layer_id][seq_id] = (K, V)
+        if moved_bytes:
+            self.raw_kv_cpu_stash_bytes += int(moved_bytes)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _selection_budget_blocks(self, L: int) -> Tuple[int, int, str]:
         B = int(self.snapkv.B)
@@ -824,7 +890,10 @@ class KVScheduler:
             self.writeback_est_required_gb = float(self._estimate_writeback_required_gb(effective_len))
             self.writeback_free_gb = float(self._selected_writeback_cuda_free_gb())
             force_cpu = str(os.environ.get("KV_MIDDLEWARE_FORCE_CPU_SELECTED_COMPACTION", "")).strip().lower() in {"1", "true", "yes", "on"}
-            backend = "cpu_selected_compaction" if force_cpu or self.writeback_free_gb < self.writeback_est_required_gb else "gpu_selected_writeback"
+            pool_needs_alloc = not bool(getattr(self.pool, "is_allocated", True))
+            backend = "cpu_selected_compaction" if force_cpu or pool_needs_alloc or self.writeback_free_gb < self.writeback_est_required_gb else "gpu_selected_writeback"
+            if backend == "cpu_selected_compaction":
+                self._stash_raw_by_layer_to_cpu(int(seq_id), raw_by_layer)
             try:
                 self._selected_writeback_transaction(seq_id, raw_by_layer, selected_mid_blocks_by_layer, effective_len, logical_len, mode, backend)
             except Exception as exc:
@@ -1526,4 +1595,9 @@ class KVScheduler:
         }
 
     def release_sequence(self, seq_id: int):
+        sid = int(seq_id)
+        for layer_id in range(self.num_layers):
+            self.raw_kv_cache[layer_id].pop(sid, None)
+            self.q_cache[layer_id].pop(sid, None)
         self.offloader.release_sequence(seq_id)
+        self.pool.release_if_empty()

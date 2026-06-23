@@ -210,7 +210,15 @@ def run_internal_prompt_batches(
                 break
             for batch_items in chunked(list(items), int(concurrency)):
                 batch_index += 1
-                batch_prompts = [str(item["prompt"]) for item in batch_items]
+                batch_prompts = [str(item.get("prompt", "")) for item in batch_items]
+                batch_input_ids = [
+                    [int(token_id) for token_id in item["input_ids"]]
+                    for item in batch_items
+                ]
+                batch_eos_token_ids = [
+                    [int(token_id) for token_id in item.get("eos_token_ids", [])]
+                    for item in batch_items
+                ]
                 step_rows: List[Dict[str, Any]] = []
 
                 def _step_cb(stat: Dict[str, Any]) -> None:
@@ -218,7 +226,13 @@ def run_internal_prompt_batches(
 
                 try:
                     t0 = time.perf_counter()
-                    outputs, metrics = engine.generate(batch_prompts, return_metrics=True, step_callback=_step_cb)
+                    outputs, metrics = engine.generate(
+                        batch_prompts,
+                        prompt_token_ids=batch_input_ids,
+                        eos_token_ids=batch_eos_token_ids,
+                        return_metrics=True,
+                        step_callback=_step_cb,
+                    )
                     batch_errors = list(metrics.get("failed_request_errors", []) or [])
                     batch_metric_rows.append(dict(metrics))
                     step_metric_rows.extend(dict(s) for s in step_rows)

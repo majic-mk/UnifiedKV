@@ -569,6 +569,7 @@ def main() -> None:
                 max_new_tokens=args.max_new_tokens,
                 repeats=args.repeats,
                 evaluate_output_fn=eval_sharegpt_output,
+                use_target_tokens=args.use_target_tokens,
             )
         else:
             if method not in frac_map:

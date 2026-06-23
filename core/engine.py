@@ -76,6 +76,7 @@ class OnlineRequest:
     token_logprobs: List[float] = field(default_factory=list)
     error: Optional[str] = None
     input_ids_cpu: Optional[torch.Tensor] = None
+    eos_token_ids: Set[int] = field(default_factory=set)
     prompt_token_len: int = 0
     prefill_cursor: int = 0
     prefill_past_kv: Any = None
@@ -96,6 +97,28 @@ class OnlineRequest:
 
 
 class ManagedInferenceEngine:
+    def _auto_online_prefill_active_token_budget(self) -> int:
+        cfg = self.model.config
+        n_layers = int(getattr(cfg, "num_hidden_layers", 0) or 0)
+        n_heads = int(getattr(cfg, "num_attention_heads", 0) or 0)
+        n_kv_heads = int(getattr(cfg, "num_key_value_heads", n_heads) or n_heads)
+        head_dim = int(getattr(cfg, "head_dim", 0) or 0)
+        if head_dim <= 0 and n_heads > 0:
+            head_dim = int(getattr(cfg, "hidden_size", 0) or 0) // int(n_heads)
+        try:
+            dtype = next(self.model.parameters()).dtype
+            dtype_bytes = int(torch.empty((), dtype=dtype).element_size())
+        except Exception:
+            dtype_bytes = 2
+        m_kv = int(2 * n_layers * n_kv_heads * head_dim * dtype_bytes)
+        self.online_prefill_auto_m_kv_bytes = int(m_kv)
+        if m_kv <= 0:
+            return 0
+        budget_bytes = int(float(self.online_prefill_auto_memory_gb) * (1024 ** 3))
+        raw_tokens = max(1, int(budget_bytes // m_kv))
+        align = max(1, int(self.online_prefill_auto_align_tokens))
+        return raw_tokens if raw_tokens < align else max(align, int(raw_tokens // align) * align)
+
     def __init__(
         self,
         model_name: str = "/root/autodl-tmp/models/Qwen2.5-7B-Instruct",
@@ -227,6 +250,9 @@ class ManagedInferenceEngine:
         self.online_prefill_admission_lookahead = max(1, _env_int("KV_MIDDLEWARE_ONLINE_PREFILL_ADMISSION_LOOKAHEAD", int(online_prefill_admission_lookahead)))
         self.online_prefill_cuda_headroom_gb = max(0.0, _env_float("KV_MIDDLEWARE_ONLINE_PREFILL_CUDA_HEADROOM_GB", float(online_prefill_cuda_headroom_gb)))
         self.online_prefill_min_effective_chunk = max(1, _env_int("KV_MIDDLEWARE_ONLINE_PREFILL_MIN_EFFECTIVE_CHUNK", int(online_prefill_min_effective_chunk)))
+        self.online_prefill_auto_memory_gb = max(0.0, _env_float("KV_MIDDLEWARE_ONLINE_PREFILL_MEMORY_GB", 2.0))
+        self.online_prefill_auto_align_tokens = max(1, _env_int("KV_MIDDLEWARE_ONLINE_PREFILL_ALIGN_TOKENS", 1024))
+        self.online_prefill_auto_m_kv_bytes = 0
         self.online_prefill_active_token_budget = max(0, _env_int("KV_MIDDLEWARE_ONLINE_PREFILL_ACTIVE_TOKEN_BUDGET", int(online_prefill_active_token_budget)))
         self.p2_ready_reclaim_margin_blocks = max(0, _env_int("KV_MIDDLEWARE_P2_READY_RECLAIM_MARGIN_BLOCKS", int(p2_ready_reclaim_margin_blocks)))
         self.p2_max_ready_sequences_per_step = max(1, _env_int("KV_MIDDLEWARE_P2_MAX_READY_SEQUENCES_PER_STEP", int(p2_max_ready_sequences_per_step)))
@@ -309,6 +335,16 @@ class ManagedInferenceEngine:
             else:
                 raise
         self.model.eval()
+        generation_eos = getattr(self.model.generation_config, "eos_token_id", None)
+        if generation_eos is None:
+            generation_eos = self.tokenizer.eos_token_id
+        if isinstance(generation_eos, int):
+            generation_eos = [generation_eos]
+        self.default_eos_token_ids = {
+            int(token_id)
+            for token_id in (generation_eos or [])
+            if token_id is not None
+        }
 
         torch.cuda.synchronize()
         model_used = torch.cuda.memory_allocated()
@@ -318,6 +354,15 @@ class ManagedInferenceEngine:
         actual_frac = gpu_mem_frac if gpu_mem_frac < 1.0 else max(0.1, available / total_gpu)
 
         print(f"Model memory: {model_used/1024**3:.1f}GB  KV-available: {available/1024**3:.1f}GB")
+
+        if self.online_prefill_admission_enabled and self.online_prefill_active_token_budget <= 0:
+            self.online_prefill_active_token_budget = self._auto_online_prefill_active_token_budget()
+            print(
+                "Online prefill budget: "
+                f"T_prefill={self.online_prefill_active_token_budget} tokens  "
+                f"M_prefill={self.online_prefill_auto_memory_gb:.2f}GiB  "
+                f"m_kv={self.online_prefill_auto_m_kv_bytes} bytes/token"
+            )
 
         # Runtime is P2-only. Keep decode pressure signals, but retire
         # decode-window pruning / P3 runtime configuration.
@@ -1577,11 +1622,13 @@ class ManagedInferenceEngine:
 
     def submit(
         self,
-        prompt: str,
+        prompt: str = "",
         request_id: Optional[int] = None,
         max_new_tokens: Optional[int] = None,
+        input_ids: Optional[Sequence[int]] = None,
+        eos_token_ids: Optional[Sequence[int]] = None,
     ) -> int:
-        if not isinstance(prompt, str):
+        if input_ids is None and not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
         if self._pending_request_count() >= self.max_waiting_requests:
             raise RuntimeError(
@@ -1598,7 +1645,28 @@ class ManagedInferenceEngine:
             self._next_request_id = max(self._next_request_id, rid + 1)
 
         submit_time_s = time.perf_counter()
-        token_ids = self.tokenizer(prompt, return_tensors='pt', truncation=False).input_ids.squeeze(0).cpu()
+        if input_ids is None:
+            token_ids = self.tokenizer(
+                prompt,
+                return_tensors='pt',
+                truncation=False,
+            ).input_ids.squeeze(0).cpu()
+        else:
+            token_ids = torch.as_tensor(
+                list(input_ids),
+                dtype=torch.long,
+            ).reshape(-1).cpu()
+            if token_ids.numel() <= 0:
+                raise ValueError("input_ids must not be empty")
+        request_eos_token_ids = {
+            int(token_id)
+            for token_id in (
+                self.default_eos_token_ids
+                if eos_token_ids is None
+                else eos_token_ids
+            )
+            if token_id is not None
+        }
         req = OnlineRequest(
             request_id=rid,
             prompt=prompt,
@@ -1606,6 +1674,7 @@ class ManagedInferenceEngine:
             arrival_step=self._online_step,
             state=REQ_WAITING_PREFILL,
             input_ids_cpu=token_ids,
+            eos_token_ids=request_eos_token_ids,
             prompt_token_len=int(token_ids.numel()),
             submit_time_s=float(submit_time_s),
         )
@@ -1832,7 +1901,7 @@ class ManagedInferenceEngine:
         del next_logits, next_tok
         req.last_logits = None
 
-        eos_hit = first_tok == self.tokenizer.eos_token_id
+        eos_hit = first_tok in req.eos_token_ids
         max_hit = len(req.generated_tokens) >= int(req.max_new_tokens)
         if eos_hit or max_hit:
             req.eos_reached = bool(eos_hit)
@@ -1977,6 +2046,8 @@ class ManagedInferenceEngine:
     def _mark_request_failed(self, req: OnlineRequest, error: Exception):
         if req.state == REQ_FAILED:
             return
+        req.prefill_past_kv = None
+        req.last_logits = None
         req.state = REQ_FAILED
         req.error = str(error)
         req.finished_step = self._online_step
@@ -1992,6 +2063,8 @@ class ManagedInferenceEngine:
             self.scheduler.release_sequence(req.request_id)
         except Exception:
             pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         self.finished_queue.append(
             {
                 'request_id': int(req.request_id),
@@ -2547,6 +2620,11 @@ class ManagedInferenceEngine:
                             pass
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
+                        if req.prefill_past_kv is None:
+                            self._mark_request_failed(req, exc)
+                            failed += 1
+                            remove_ids.append(rid)
+                            continue
                         self._apply_prefill_backpressure("prefill_activate_failed")
                         budget_left = 0
                         break
@@ -2604,6 +2682,11 @@ class ManagedInferenceEngine:
                             pass
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
+                        if req.prefill_past_kv is None:
+                            self._mark_request_failed(req, exc)
+                            failed += 1
+                            remove_ids.append(rid)
+                            continue
                         self._apply_prefill_backpressure("prefill_activate_failed")
                         budget_left = 0
                         break
@@ -3150,7 +3233,7 @@ class ManagedInferenceEngine:
                     self._online_generated_tokens += 1
                     if self._return_details_online:
                         req.token_logprobs.append(float(next_logprobs[j, next_tok[j]].item()))
-                    eos_hit = tok == self.tokenizer.eos_token_id
+                    eos_hit = tok in req.eos_token_ids
                     max_hit = len(req.generated_tokens) >= int(req.max_new_tokens)
                     if eos_hit or max_hit:
                         req.eos_reached = bool(eos_hit)
@@ -3520,14 +3603,23 @@ class ManagedInferenceEngine:
 
     def _generate_with_online(
         self,
-        prompts: List[str],
+        prompts: Optional[List[str]] = None,
+        prompt_token_ids: Optional[Sequence[Sequence[int]]] = None,
+        eos_token_ids: Optional[Sequence[Sequence[int]]] = None,
         return_metrics: bool = False,
         return_details: bool = False,
         step_callback: Optional[Any] = None,
     ):
         if self.has_pending_requests():
             raise RuntimeError("engine has pending online requests; drain them before calling generate()")
-        if not prompts:
+        prompts = list(prompts or [])
+        token_batches = list(prompt_token_ids or [])
+        request_count = len(token_batches) if token_batches else len(prompts)
+        if token_batches and prompts and len(token_batches) != len(prompts):
+            raise ValueError("prompts and prompt_token_ids must have the same length")
+        if eos_token_ids is not None and len(eos_token_ids) != request_count:
+            raise ValueError("eos_token_ids must have one entry per request")
+        if request_count <= 0:
             if return_metrics and return_details:
                 return [], {}, {'token_ids': [], 'token_logprobs': []}
             if return_metrics:
@@ -3543,8 +3635,17 @@ class ManagedInferenceEngine:
         self._online_total_t0 = time.perf_counter()
 
         rid_order: List[int] = []
-        for i, prompt in enumerate(prompts):
-            rid = self.submit(prompt, request_id=i, max_new_tokens=self.max_new_tokens)
+        for i in range(request_count):
+            prompt = prompts[i] if prompts else ""
+            request_input_ids = token_batches[i] if token_batches else None
+            request_eos = eos_token_ids[i] if eos_token_ids is not None else None
+            rid = self.submit(
+                prompt,
+                request_id=i,
+                max_new_tokens=self.max_new_tokens,
+                input_ids=request_input_ids,
+                eos_token_ids=request_eos,
+            )
             rid_order.append(rid)
 
         while self.has_pending_requests():
@@ -3576,7 +3677,7 @@ class ManagedInferenceEngine:
 
         decode_window_status = self.scheduler.get_decode_window_status()
         metrics = {
-            'num_prompts': int(len(prompts)),
+            'num_prompts': int(request_count),
             'generated_tokens': int(generated_tokens),
             'prefill_ms': round(self._online_prefill_ms, 3),
             'decode_ms': round(decode_ms, 3),
@@ -3782,13 +3883,17 @@ class ManagedInferenceEngine:
 
     def generate(
         self,
-        prompts: List[str],
+        prompts: Optional[List[str]] = None,
+        prompt_token_ids: Optional[Sequence[Sequence[int]]] = None,
+        eos_token_ids: Optional[Sequence[Sequence[int]]] = None,
         return_metrics: bool = False,
         return_details: bool = False,
         step_callback: Optional[Any] = None,
     ):
         return self._generate_with_online(
             prompts=prompts,
+            prompt_token_ids=prompt_token_ids,
+            eos_token_ids=eos_token_ids,
             return_metrics=return_metrics,
             return_details=return_details,
             step_callback=step_callback,

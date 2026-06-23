@@ -1,0 +1,486 @@
+{
+   "description" : "ShareGPT-small64 fixed workload for capacity and ablation sweeps",
+   "metadata" : {
+      "candidate_count" : 162348,
+      "filters" : {
+         "prompt_len_max" : 8192,
+         "prompt_len_min" : 512,
+         "target_len_max" : 512,
+         "target_len_min" : 64
+      },
+      "prompt_tokens" : {
+         "count" : 64,
+         "max" : 2006,
+         "mean" : 1225.453125,
+         "min" : 558,
+         "p50" : 1228,
+         "p90" : 1797,
+         "p95" : 1923
+      },
+      "sample_count" : 64,
+      "seed" : 20260420,
+      "target_tokens" : {
+         "count" : 64,
+         "max" : 501,
+         "mean" : 263.34375,
+         "min" : 98,
+         "p50" : 242,
+         "p90" : 427,
+         "p95" : 465
+      }
+   },
+   "name" : "sharegpt_small64",
+   "omits_prompt_text" : true,
+   "reconstruction_note" : "Use the original ShareGPT corpus plus record_idx, turn_idx, tokenizer, and preprocessing code to reconstruct prompts.",
+   "samples" : [
+      {
+         "order" : 0,
+         "prompt_tokens" : 1536,
+         "record_idx" : 42376,
+         "target_tokens" : 229,
+         "turn_idx" : 14
+      },
+      {
+         "order" : 1,
+         "prompt_tokens" : 963,
+         "record_idx" : 52109,
+         "target_tokens" : 238,
+         "turn_idx" : 8
+      },
+      {
+         "order" : 2,
+         "prompt_tokens" : 1824,
+         "record_idx" : 74428,
+         "target_tokens" : 446,
+         "turn_idx" : 8
+      },
+      {
+         "order" : 3,
+         "prompt_tokens" : 1013,
+         "record_idx" : 26269,
+         "target_tokens" : 233,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 4,
+         "prompt_tokens" : 1768,
+         "record_idx" : 13467,
+         "target_tokens" : 150,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 5,
+         "prompt_tokens" : 562,
+         "record_idx" : 34221,
+         "target_tokens" : 265,
+         "turn_idx" : 2
+      },
+      {
+         "order" : 6,
+         "prompt_tokens" : 1999,
+         "record_idx" : 47970,
+         "target_tokens" : 186,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 7,
+         "prompt_tokens" : 1068,
+         "record_idx" : 28778,
+         "target_tokens" : 401,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 8,
+         "prompt_tokens" : 1020,
+         "record_idx" : 9341,
+         "target_tokens" : 393,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 9,
+         "prompt_tokens" : 875,
+         "record_idx" : 92798,
+         "target_tokens" : 302,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 10,
+         "prompt_tokens" : 1033,
+         "record_idx" : 82033,
+         "target_tokens" : 501,
+         "turn_idx" : 3
+      },
+      {
+         "order" : 11,
+         "prompt_tokens" : 786,
+         "record_idx" : 78601,
+         "target_tokens" : 151,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 12,
+         "prompt_tokens" : 2006,
+         "record_idx" : 52506,
+         "target_tokens" : 240,
+         "turn_idx" : 15
+      },
+      {
+         "order" : 13,
+         "prompt_tokens" : 1410,
+         "record_idx" : 9245,
+         "target_tokens" : 271,
+         "turn_idx" : 8
+      },
+      {
+         "order" : 14,
+         "prompt_tokens" : 1712,
+         "record_idx" : 19614,
+         "target_tokens" : 124,
+         "turn_idx" : 21
+      },
+      {
+         "order" : 15,
+         "prompt_tokens" : 1465,
+         "record_idx" : 23925,
+         "target_tokens" : 465,
+         "turn_idx" : 10
+      },
+      {
+         "order" : 16,
+         "prompt_tokens" : 1593,
+         "record_idx" : 92159,
+         "target_tokens" : 242,
+         "turn_idx" : 14
+      },
+      {
+         "order" : 17,
+         "prompt_tokens" : 1754,
+         "record_idx" : 89026,
+         "target_tokens" : 468,
+         "turn_idx" : 10
+      },
+      {
+         "order" : 18,
+         "prompt_tokens" : 971,
+         "record_idx" : 20235,
+         "target_tokens" : 179,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 19,
+         "prompt_tokens" : 1163,
+         "record_idx" : 65731,
+         "target_tokens" : 132,
+         "turn_idx" : 8
+      },
+      {
+         "order" : 20,
+         "prompt_tokens" : 1360,
+         "record_idx" : 86597,
+         "target_tokens" : 343,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 21,
+         "prompt_tokens" : 665,
+         "record_idx" : 71761,
+         "target_tokens" : 224,
+         "turn_idx" : 3
+      },
+      {
+         "order" : 22,
+         "prompt_tokens" : 881,
+         "record_idx" : 26268,
+         "target_tokens" : 366,
+         "turn_idx" : 4
+      },
+      {
+         "order" : 23,
+         "prompt_tokens" : 1228,
+         "record_idx" : 40051,
+         "target_tokens" : 121,
+         "turn_idx" : 17
+      },
+      {
+         "order" : 24,
+         "prompt_tokens" : 2003,
+         "record_idx" : 36101,
+         "target_tokens" : 282,
+         "turn_idx" : 11
+      },
+      {
+         "order" : 25,
+         "prompt_tokens" : 1365,
+         "record_idx" : 88567,
+         "target_tokens" : 239,
+         "turn_idx" : 11
+      },
+      {
+         "order" : 26,
+         "prompt_tokens" : 636,
+         "record_idx" : 5089,
+         "target_tokens" : 217,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 27,
+         "prompt_tokens" : 1509,
+         "record_idx" : 47012,
+         "target_tokens" : 501,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 28,
+         "prompt_tokens" : 853,
+         "record_idx" : 91173,
+         "target_tokens" : 228,
+         "turn_idx" : 11
+      },
+      {
+         "order" : 29,
+         "prompt_tokens" : 885,
+         "record_idx" : 54263,
+         "target_tokens" : 218,
+         "turn_idx" : 12
+      },
+      {
+         "order" : 30,
+         "prompt_tokens" : 1453,
+         "record_idx" : 93673,
+         "target_tokens" : 425,
+         "turn_idx" : 8
+      },
+      {
+         "order" : 31,
+         "prompt_tokens" : 635,
+         "record_idx" : 73058,
+         "target_tokens" : 149,
+         "turn_idx" : 1
+      },
+      {
+         "order" : 32,
+         "prompt_tokens" : 1269,
+         "record_idx" : 32208,
+         "target_tokens" : 126,
+         "turn_idx" : 6
+      },
+      {
+         "order" : 33,
+         "prompt_tokens" : 628,
+         "record_idx" : 72139,
+         "target_tokens" : 198,
+         "turn_idx" : 4
+      },
+      {
+         "order" : 34,
+         "prompt_tokens" : 928,
+         "record_idx" : 78653,
+         "target_tokens" : 236,
+         "turn_idx" : 6
+      },
+      {
+         "order" : 35,
+         "prompt_tokens" : 1430,
+         "record_idx" : 31860,
+         "target_tokens" : 148,
+         "turn_idx" : 3
+      },
+      {
+         "order" : 36,
+         "prompt_tokens" : 1587,
+         "record_idx" : 10044,
+         "target_tokens" : 253,
+         "turn_idx" : 15
+      },
+      {
+         "order" : 37,
+         "prompt_tokens" : 1542,
+         "record_idx" : 5206,
+         "target_tokens" : 148,
+         "turn_idx" : 24
+      },
+      {
+         "order" : 38,
+         "prompt_tokens" : 1849,
+         "record_idx" : 22521,
+         "target_tokens" : 221,
+         "turn_idx" : 18
+      },
+      {
+         "order" : 39,
+         "prompt_tokens" : 1315,
+         "record_idx" : 93664,
+         "target_tokens" : 264,
+         "turn_idx" : 14
+      },
+      {
+         "order" : 40,
+         "prompt_tokens" : 1923,
+         "record_idx" : 70492,
+         "target_tokens" : 349,
+         "turn_idx" : 14
+      },
+      {
+         "order" : 41,
+         "prompt_tokens" : 1678,
+         "record_idx" : 47509,
+         "target_tokens" : 98,
+         "turn_idx" : 19
+      },
+      {
+         "order" : 42,
+         "prompt_tokens" : 1501,
+         "record_idx" : 12116,
+         "target_tokens" : 101,
+         "turn_idx" : 11
+      },
+      {
+         "order" : 43,
+         "prompt_tokens" : 882,
+         "record_idx" : 11451,
+         "target_tokens" : 460,
+         "turn_idx" : 4
+      },
+      {
+         "order" : 44,
+         "prompt_tokens" : 558,
+         "record_idx" : 52492,
+         "target_tokens" : 369,
+         "turn_idx" : 2
+      },
+      {
+         "order" : 45,
+         "prompt_tokens" : 663,
+         "record_idx" : 49749,
+         "target_tokens" : 217,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 46,
+         "prompt_tokens" : 1215,
+         "record_idx" : 12561,
+         "target_tokens" : 242,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 47,
+         "prompt_tokens" : 942,
+         "record_idx" : 2371,
+         "target_tokens" : 344,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 48,
+         "prompt_tokens" : 1377,
+         "record_idx" : 14064,
+         "target_tokens" : 264,
+         "turn_idx" : 12
+      },
+      {
+         "order" : 49,
+         "prompt_tokens" : 922,
+         "record_idx" : 188,
+         "target_tokens" : 238,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 50,
+         "prompt_tokens" : 762,
+         "record_idx" : 75158,
+         "target_tokens" : 157,
+         "turn_idx" : 12
+      },
+      {
+         "order" : 51,
+         "prompt_tokens" : 806,
+         "record_idx" : 29166,
+         "target_tokens" : 253,
+         "turn_idx" : 17
+      },
+      {
+         "order" : 52,
+         "prompt_tokens" : 906,
+         "record_idx" : 34643,
+         "target_tokens" : 277,
+         "turn_idx" : 6
+      },
+      {
+         "order" : 53,
+         "prompt_tokens" : 1480,
+         "record_idx" : 74915,
+         "target_tokens" : 131,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 54,
+         "prompt_tokens" : 1299,
+         "record_idx" : 19421,
+         "target_tokens" : 278,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 55,
+         "prompt_tokens" : 1038,
+         "record_idx" : 66334,
+         "target_tokens" : 328,
+         "turn_idx" : 7
+      },
+      {
+         "order" : 56,
+         "prompt_tokens" : 1374,
+         "record_idx" : 61888,
+         "target_tokens" : 173,
+         "turn_idx" : 5
+      },
+      {
+         "order" : 57,
+         "prompt_tokens" : 1797,
+         "record_idx" : 44416,
+         "target_tokens" : 427,
+         "turn_idx" : 18
+      },
+      {
+         "order" : 58,
+         "prompt_tokens" : 1045,
+         "record_idx" : 3451,
+         "target_tokens" : 191,
+         "turn_idx" : 6
+      },
+      {
+         "order" : 59,
+         "prompt_tokens" : 692,
+         "record_idx" : 31737,
+         "target_tokens" : 312,
+         "turn_idx" : 4
+      },
+      {
+         "order" : 60,
+         "prompt_tokens" : 1216,
+         "record_idx" : 46426,
+         "target_tokens" : 385,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 61,
+         "prompt_tokens" : 1795,
+         "record_idx" : 47134,
+         "target_tokens" : 173,
+         "turn_idx" : 10
+      },
+      {
+         "order" : 62,
+         "prompt_tokens" : 1319,
+         "record_idx" : 20074,
+         "target_tokens" : 263,
+         "turn_idx" : 9
+      },
+      {
+         "order" : 63,
+         "prompt_tokens" : 697,
+         "record_idx" : 21853,
+         "target_tokens" : 301,
+         "turn_idx" : 2
+      }
+   ],
+   "source_dataset" : "ShareGPT_V3_unfiltered_cleaned_split.json"
+}

@@ -1,7 +1,7 @@
 import math
 import threading
 import torch
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 
 class PagedKVPool:
@@ -44,11 +44,8 @@ class PagedKVPool:
         bytes_per_block = 2 * num_layers * block_size * num_kv_heads * head_dim * 2
         self.N_total = max(1, int(max_kv_mem / bytes_per_block))
         
-        self.k_cache = torch.zeros(
-            num_layers, self.N_total, block_size, num_kv_heads, head_dim,
-            dtype=dtype, device='cuda'
-        )
-        self.v_cache = torch.zeros_like(self.k_cache)
+        self._k_cache: Optional[torch.Tensor] = None
+        self._v_cache: Optional[torch.Tensor] = None
         
         self.lock = threading.Lock()
         self.free_blocks: List[int] = list(range(self.N_total))
@@ -59,6 +56,42 @@ class PagedKVPool:
         
         self.N_wm_low = max(1, int(0.15 * self.N_total))
         self.N_wm_high = max(2, int(0.40 * self.N_total))
+
+    @property
+    def is_allocated(self) -> bool:
+        return self._k_cache is not None and self._v_cache is not None
+
+    def ensure_allocated(self) -> None:
+        if self.is_allocated:
+            return
+        self._k_cache = torch.zeros(
+            self.num_layers, self.N_total, self.B, self.num_kv_heads, self.head_dim,
+            dtype=self.dtype, device='cuda'
+        )
+        self._v_cache = torch.zeros_like(self._k_cache)
+
+    @property
+    def k_cache(self) -> torch.Tensor:
+        self.ensure_allocated()
+        assert self._k_cache is not None
+        return self._k_cache
+
+    @property
+    def v_cache(self) -> torch.Tensor:
+        self.ensure_allocated()
+        assert self._v_cache is not None
+        return self._v_cache
+
+    def release_if_empty(self) -> bool:
+        with self.lock:
+            empty = len(self.used_blocks) == 0
+        if not empty or not self.is_allocated:
+            return False
+        self._k_cache = None
+        self._v_cache = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return True
     
     @property
     def n_free(self) -> int:

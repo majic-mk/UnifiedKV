@@ -91,9 +91,23 @@ OFF_RAW_PAGE16_ONLINE_ARGS: Dict[str, object] = {
     "kv_admission_margin_blocks": 128,
 }
 
-OFF_COMPRESS_ARGS: Dict[str, object] = {
+OFF_COMPRESS_RATIO_BASE_ARGS: Dict[str, object] = {
     "retain_ratio": 0.10,
     "p2_enabled": False,
+}
+
+# Default compression profiles use the paper fixed budget. Ratio-based variants
+# remain available only through explicit _rXXX group names.
+OFF_COMPRESS_ARGS: Dict[str, object] = {
+    "retain_budget_tokens": 2048,
+    "selected_writeback_enabled": True,
+    "p2_enabled": False,
+}
+
+OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS: Dict[str, object] = {
+    **OFF_COMPRESS_RATIO_BASE_ARGS,
+    "decode_path_mode": "page16_native",
+    "decode_page16_native_strict": True,
 }
 
 OFF_COMPRESS_PAGE16_ARGS: Dict[str, object] = {
@@ -102,8 +116,7 @@ OFF_COMPRESS_PAGE16_ARGS: Dict[str, object] = {
     "decode_page16_native_strict": True,
 }
 
-P2_ONLY_COMPRESS_ARGS: Dict[str, object] = {
-    "retain_ratio": 0.10,
+P2_COMMON_ARGS: Dict[str, object] = {
     "p2_enabled": True,
     "p2_min_reclaim_blocks": 32,
     "p2_gain_window_steps": 8,
@@ -120,14 +133,36 @@ P2_ONLY_COMPRESS_ARGS: Dict[str, object] = {
     "kv_min_resident_ratio": 0.0,
 }
 
+P2_RATIO_BASE_ARGS: Dict[str, object] = {
+    **P2_COMMON_ARGS,
+    "retain_ratio": 0.10,
+}
+
+P2_ONLY_COMPRESS_ARGS: Dict[str, object] = {
+    **P2_COMMON_ARGS,
+    "retain_budget_tokens": 2048,
+    "selected_writeback_enabled": True,
+}
+
+P2_PAGE16_RATIO_BASE_ARGS: Dict[str, object] = {
+    **P2_RATIO_BASE_ARGS,
+    "decode_path_mode": "page16_native",
+    "decode_page16_native_strict": True,
+}
+
 P2_PAGE16_ARGS: Dict[str, object] = {
     **P2_ONLY_COMPRESS_ARGS,
     "decode_path_mode": "page16_native",
     "decode_page16_native_strict": True,
 }
 
-# Offline/capacity profile: allow pressure to build and let P2 ready reclaim act
-# as a fallback. Keep admission off to preserve fixed-batch semantics.
+P2_PAGE16_OFFLINE_RATIO_BASE_ARGS: Dict[str, object] = {
+    **P2_PAGE16_RATIO_BASE_ARGS,
+    "kv_admission_enabled": False,
+}
+
+# Offline/capacity profile: fixed-budget page16 compression with P2 ready
+# offload/prefetch. Keep admission off to preserve fixed-batch semantics.
 P2_PAGE16_OFFLINE_ARGS: Dict[str, object] = {
     **P2_PAGE16_ARGS,
     "kv_admission_enabled": False,
@@ -180,7 +215,8 @@ P2_PAGE16_ONLINE_B2048_ARGS: Dict[str, object] = {
     "online_prefill_cap_short": 16,
     "online_prefill_cap_mid": 16,
     "online_prefill_cap_long": 16,
-    "online_prefill_active_token_budget": 16384,
+    # 0 means auto: floor(M_prefill / m_kv), aligned down by the engine.
+    "online_prefill_active_token_budget": 0,
     "online_prefill_admission_lookahead": 8,
     "online_prefill_cuda_headroom_gb": 0.5,
     "online_prefill_min_effective_chunk": 128,
@@ -376,7 +412,7 @@ P2_PAGE16_ONLINE_B2048_NOP2_LOWWM008_FLOOR9_ARGS: Dict[str, object] = {
 
 
 OFF_COMPRESS_PAGE16_R015_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.15,
 }
 
@@ -432,7 +468,7 @@ SNAPKV_DENSE_B2048_ARGS: Dict[str, object] = {
 }
 
 P2_PAGE16_OFFLINE_R015_ARGS: Dict[str, object] = {
-    **P2_PAGE16_OFFLINE_ARGS,
+    **P2_PAGE16_OFFLINE_RATIO_BASE_ARGS,
     "retain_ratio": 0.15,
 }
 
@@ -464,41 +500,41 @@ P2_PAGE16_OFFLINE_R015_HP_SANITY_V2_ARGS: Dict[str, object] = {
 }
 
 OFF_COMPRESS_PAGE16_R020_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.20,
 }
 
 OFF_COMPRESS_PAGE16_R030_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.30,
 }
 
 OFF_COMPRESS_PAGE16_R050_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.50,
 }
 
 OFF_COMPRESS_PAGE16_R010_S64O64_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.10,
     "sink_len": 64,
     "snapkv_observation_len": 64,
 }
 
 OFF_COMPRESS_PAGE16_R015_S64O64_ARGS: Dict[str, object] = {
-    **OFF_COMPRESS_PAGE16_ARGS,
+    **OFF_COMPRESS_PAGE16_RATIO_BASE_ARGS,
     "retain_ratio": 0.15,
     "sink_len": 64,
     "snapkv_observation_len": 64,
 }
 
 P2_PAGE16_OFFLINE_R020_ARGS: Dict[str, object] = {
-    **P2_PAGE16_OFFLINE_ARGS,
+    **P2_PAGE16_OFFLINE_RATIO_BASE_ARGS,
     "retain_ratio": 0.20,
 }
 
 P2_PAGE16_OFFLINE_R015_S64O64_ARGS: Dict[str, object] = {
-    **P2_PAGE16_OFFLINE_ARGS,
+    **P2_PAGE16_OFFLINE_RATIO_BASE_ARGS,
     "retain_ratio": 0.15,
     "sink_len": 64,
     "snapkv_observation_len": 64,

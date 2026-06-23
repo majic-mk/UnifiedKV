@@ -92,12 +92,14 @@ OFF_RAW_ARGS = {
 }
 
 OFF_COMPRESS_ARGS = {
-    "retain_ratio": 0.10,
+    "retain_budget_tokens": 2048,
+    "selected_writeback_enabled": True,
     "p2_enabled": False,
 }
 
 P2_ONLY_COMPRESS_ARGS = {
-    "retain_ratio": 0.10,
+    "retain_budget_tokens": 2048,
+    "selected_writeback_enabled": True,
     "p2_enabled": True,
     "p2_min_reclaim_blocks": 32,
     "p2_gain_window_steps": 8,
@@ -427,10 +429,17 @@ def compression_profile_for_group(group: str) -> str:
     args.update(GROUP_ARGS[group])
     sink = int(args.get("sink_len", 16))
     obs = int(args.get("snapkv_observation_len", 16))
-    retain = float(args.get("retain_ratio", 1.0))
+    budget = args.get("retain_budget_tokens", None)
+    retain = args.get("retain_ratio", None)
     p2_sink = int(args.get("p2_sink_tokens", 16))
     p2_recent = int(args.get("p2_recent_tokens", 16))
-    return f"sink={sink};snapkv_obs={obs};retain={retain:.3f};p2_sink={p2_sink};p2_recent={p2_recent}"
+    if budget is not None:
+        retain_part = f"budget={int(budget)}"
+    elif retain is not None:
+        retain_part = f"retain={float(retain):.3f}"
+    else:
+        retain_part = "retain=full"
+    return f"sink={sink};snapkv_obs={obs};{retain_part};p2_sink={p2_sink};p2_recent={p2_recent}"
 
 
 def build_prompts_for_cell(tokenizer, target_tokens: int, concurrency: int) -> Tuple[List[str], List[int]]:
@@ -926,6 +935,8 @@ def worker_main(args: argparse.Namespace) -> None:
                     decode_active_cap_initial=int(args.decode_active_cap_initial),
                     max_decode_active_cap=int(args.max_decode_active_cap),
                 )
+                if str(os.environ.get("KV_BENCH_FORCE_MAX_NEW_TOKENS", "")).strip() == "1":
+                    engine.tokenizer.eos_token_id = None
                 model_memory_gb, kv_available_gb = compute_memory_stats(engine, frac)
                 metrics_list = []
                 wall_list = []
@@ -944,6 +955,20 @@ def worker_main(args: argparse.Namespace) -> None:
                     wall_ms = (time.perf_counter() - t0) * 1000.0
                     if not isinstance(outputs, list) or len(outputs) != int(args.worker_concurrency):
                         raise RuntimeError(f"unexpected_output_count:{len(outputs) if isinstance(outputs, list) else 'non_list'}")
+                    if str(os.environ.get("KV_BENCH_FORCE_MAX_NEW_TOKENS", "")).strip() == "1":
+                        expected_tokens = int(args.worker_concurrency) * int(args.max_new_tokens)
+                        actual_tokens = int(metrics.get("generated_tokens", 0) or 0)
+                        failed_errors = [
+                            str(x).strip()
+                            for x in list(metrics.get("failed_request_errors", []) or [])
+                            if str(x).strip()
+                        ]
+                        if failed_errors or actual_tokens < expected_tokens:
+                            raise RuntimeError(
+                                "forced_generation_incomplete:"
+                                f" generated={actual_tokens}/{expected_tokens};"
+                                f" errors={failed_errors[:3]}"
+                            )
                     decode_only = [
                         float(s.get("step_ms", 0.0))
                         for s in repeat_step_rows

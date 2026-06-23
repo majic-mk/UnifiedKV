@@ -1,8 +1,19 @@
+# Core runtime
 torch
 transformers
 accelerate
+datasets
 numpy
 tqdm
-datasets
 psutil
 requests
+safetensors
+sentencepiece
+protobuf
+
+# BP-KV direct decoding backend
+triton
+flash-attn
+
+# Optional baseline runners
+vllm

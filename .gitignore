@@ -27,6 +27,7 @@ ShareGPT_V3_unfiltered_cleaned_split.json
 # Experiment outputs/logs
 benchmarks/results/
 benchmarks/archive/
+benchmarks/probes/
 results/
 backups/
 *.log
@@ -37,17 +38,18 @@ backups/
 *.pid
 *.stdout
 *.stderr
-
-# Local/editor
-.trae/
-.vscode/
-.idea/
-.DS_Store
 *.stdout.txt
 *.stderr.txt
 *.nohup
 *.bg.log
 __tmp*.py
-benchmarks/probes/
-benchmarks/exp1_*/
-??????.md
+
+# Local/private notes
+.trae/
+.vscode/
+.idea/
+.DS_Store
+flexgen_offload_test_plan.md
+专利技术方案.md
+实验汇总_*.md
+新人指南.md
